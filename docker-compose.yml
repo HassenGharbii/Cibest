@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: cdgxpress_db
+    environment:
+      POSTGRES_USER: cdgxpress_user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: cdgxpress
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    container_name: cdgxpress_backend
+    depends_on:
+      - db
+    ports:
+      - "3000:3000"
+    environment:
+      DB_HOST: db
+      DB_USER: cdgxpress_user
+      DB_PASSWORD: password
+      DB_NAME: cdgxpress
+      DB_PORT: 5432
+
+
+
+volumes:
+  db_data:
