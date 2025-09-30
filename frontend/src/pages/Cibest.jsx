@@ -45,7 +45,7 @@ const Cibest = () => {
   const fetchCameraData = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:5001/api/cibest/cameras');
+      const response = await fetch('http://localhost:3000/api/cibest/cameras');
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -71,7 +71,7 @@ const Cibest = () => {
   // Function to fetch status summary
   const fetchStatusSummary = async () => {
     try {
-      const response = await fetch('http://localhost:5001/api/cibest/cameras/status');
+      const response = await fetch('http://localhost:3000/api/cibest/cameras/status');
       
       if (response.ok) {
         const result = await response.json();
@@ -85,19 +85,19 @@ const Cibest = () => {
   };
 
   useEffect(() => {
-    // Initial fetch immediately
-    fetchCameraData();
+    // Initial fetch immediately (manual)
+    fetchCameraData(false);
     fetchStatusSummary();
 
-    // Set interval to fetch every 130,000 ms (130 seconds)
+    // Set interval to fetch every 10 seconds (auto-refresh)
     const intervalId = setInterval(() => {
-      fetchCameraData();
+      fetchCameraData(true); // Auto-refresh mode
       fetchStatusSummary();
     }, 10000);
 
     // Cleanup on component unmount
     return () => clearInterval(intervalId);
-  }, []);
+  }, []); // Remove loading dependency to prevent interval restart
 
   // Prepare data for charts
   const getChartData = () => {

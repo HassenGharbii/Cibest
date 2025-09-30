@@ -153,7 +153,7 @@ def main():
         while True:
             run_ping_cycle(conn)
             print("⏳ Waiting 5 minutes...\n")
-            time.sleep(300)  # Wait 5 minutes
+            time.sleep(20)  # Wait 5 minutes
     except KeyboardInterrupt:
         print("\n🛑 Stopped by user.")
     finally:
