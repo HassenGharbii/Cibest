@@ -3,15 +3,19 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
+const host = process.env.HOST || '0.0.0.0';
 
 // PostgreSQL connection (match Python env variables)
 const pool = new Pool({
-  host: process.env.POSTGRES_HOST || 'db',
-  port: process.env.POSTGRES_PORT || 5432,
-  database: process.env.POSTGRES_DB || 'cdgxpress',
-  user: process.env.POSTGRES_USER || 'cdgxpress_user',
-  password: process.env.POSTGRES_PASSWORD || 'password',
+  host: process.env.POSTGRES_HOST || process.env.DB_HOST || 'db',
+  port: process.env.POSTGRES_PORT || process.env.DB_PORT || 5432,
+  database: process.env.POSTGRES_DB || process.env.DB_NAME || 'cdgxpress',
+  user: process.env.POSTGRES_USER || process.env.DB_USER || 'cdgxpress_user',
+  password: process.env.POSTGRES_PASSWORD || process.env.DB_PASSWORD || 'password',
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
+  max: 20,
 });
 
 // Middleware
@@ -115,7 +119,50 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Test database connection on startup
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('❌ Error connecting to database:', err);
+  } else {
+    console.log('✅ Database connection successful');
+    release();
+  }
+});
+
+// Handle pool errors
+pool.on('error', (err) => {
+  console.error('❌ Unexpected error on idle client:', err);
+});
+
 // Init
-app.listen(port, () => {
-  console.log(`🚀 API server running at http://localhost:${port}`);
+const server = app.listen(port, host, () => {
+  console.log(`🚀 API server running at http://${host}:${port}`);
+});
+
+// Handle server errors
+server.on('error', (err) => {
+  console.error('❌ Server error:', err);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    pool.end(() => {
+      console.log('✅ Database pool closed');
+      process.exit(0);
+    });
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    pool.end(() => {
+      console.log('✅ Database pool closed');
+      process.exit(0);
+    });
+  });
 });
