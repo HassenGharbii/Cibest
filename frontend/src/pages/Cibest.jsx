@@ -16,6 +16,8 @@ import {
   faClock,
   faVideo
 } from '@fortawesome/free-solid-svg-icons';
+import TimelinePerformance from '../components/TimelinePerformance/TimelinePerformance';
+import NetworkTopology from '../components/NetworkTopology/NetworkTopology';
 
 const Cibest = () => {
   // Replace useDashboard with local state
@@ -91,7 +93,7 @@ const Cibest = () => {
     const intervalId = setInterval(() => {
       fetchCameraData();
       fetchStatusSummary();
-    }, 130000);
+    }, 10000);
 
     // Cleanup on component unmount
     return () => clearInterval(intervalId);
@@ -163,7 +165,7 @@ const Cibest = () => {
     }`}>
       {/* Header Component */}
       <Header 
-        title="CIBEST Camera Monitoring Dashboard"
+        title="CDGxpress Camera Monitoring Dashboard"
         icon={faVideo}
         darkMode={darkMode}
         onDarkModeToggle={() => setDarkMode(!darkMode)}
@@ -245,6 +247,18 @@ const Cibest = () => {
           height={280}
         />
       </div>
+
+      {/* New Components Row */}
+      <div className="grid grid-cols-1 gap-6 mb-8">
+        {/* Timeline Performance Component */}
+        <TimelinePerformance
+          cameras={cameras}
+          darkMode={darkMode}
+          title="Equipment Performance Timeline"
+        />
+      </div>
+
+      
 
       {/* Camera Details Table */}
       <DataTable

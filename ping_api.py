@@ -27,58 +27,67 @@ def get_device_name(ip, index):
     else:
         return f"Camera {index}"
 
-def ping_ip(ip):
+def ping_ip(ip, retries=3, delay=1):
+    """
+    Ping an IP with retries (default 3).
+    Returns a dictionary with ping result.
+    """
     system = platform.system().lower()
     count_flag = '-n' if system == 'windows' else '-c'
-    cmd = ['ping', count_flag, '1', str(ip)]
 
-    try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
-        output = result.stdout
+    for attempt in range(1, retries + 1):
+        cmd = ['ping', count_flag, '1', str(ip)]
 
-        reachable = result.returncode == 0
-        rtt = None
-        ttl = None
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
+            output = result.stdout
 
-        if reachable:
-            if system == 'windows':
-                rtt_match = re.search(r'time[=<]?\s*(\d+)\s*ms', output, re.IGNORECASE)
-                ttl_match = re.search(r'ttl[=|:](\d+)', output, re.IGNORECASE)
+            reachable = result.returncode == 0
+            rtt = None
+            ttl = None
+
+            if reachable:
+                if system == 'windows':
+                    rtt_match = re.search(r'time[=<]?\s*(\d+)\s*ms', output, re.IGNORECASE)
+                    ttl_match = re.search(r'ttl[=|:](\d+)', output, re.IGNORECASE)
+                else:
+                    rtt_match = re.search(r'time[=<]?\s*(\d+(?:\.\d+)?)\s*ms', output, re.IGNORECASE)
+                    ttl_match = re.search(r'ttl[=|:](\d+)', output, re.IGNORECASE)
+
+                if rtt_match:
+                    rtt = float(rtt_match.group(1))
+                if ttl_match:
+                    ttl = int(ttl_match.group(1))
+
+                return {
+                    "ip": str(ip),
+                    "reachable": True,
+                    "rtt_ms": rtt,
+                    "ttl": ttl,
+                    "timestamp": datetime.now(),
+                    "error": None
+                }
+
             else:
-                rtt_match = re.search(r'time[=<]?\s*(\d+(?:\.\d+)?)\s*ms', output, re.IGNORECASE)
-                ttl_match = re.search(r'ttl[=|:](\d+)', output, re.IGNORECASE)
+                print(f"⚠️ Attempt {attempt}/{retries} failed for {ip}")
+                time.sleep(delay)
 
-            if rtt_match:
-                rtt = float(rtt_match.group(1))
-            if ttl_match:
-                ttl = int(ttl_match.group(1))
+        except subprocess.TimeoutExpired:
+            print(f"⏱️ Timeout on attempt {attempt}/{retries} for {ip}")
+            time.sleep(delay)
+        except Exception as e:
+            print(f"❌ Error pinging {ip} on attempt {attempt}/{retries}: {e}")
+            time.sleep(delay)
 
-        return {
-            "ip": str(ip),
-            "reachable": reachable,
-            "rtt_ms": rtt,
-            "ttl": ttl,
-            "timestamp": datetime.now(),
-        }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "ip": str(ip),
-            "reachable": False,
-            "rtt_ms": None,
-            "ttl": None,
-            "timestamp": datetime.now(),
-            "error": "Timeout"
-        }
-    except Exception as e:
-        return {
-            "ip": str(ip),
-            "reachable": False,
-            "rtt_ms": None,
-            "ttl": None,
-            "timestamp": datetime.now(),
-            "error": str(e)
-        }
+    # If all retries failed
+    return {
+        "ip": str(ip),
+        "reachable": False,
+        "rtt_ms": None,
+        "ttl": None,
+        "timestamp": datetime.now(),
+        "error": "Unreachable after retries"
+    }
 
 def insert_ping_results(conn, results):
     with conn.cursor() as cur:
@@ -102,11 +111,10 @@ def run_ping_cycle(conn):
         device_name = get_device_name(ip, camera_index)
         result = ping_ip(ip)
         result["name"] = device_name
-        if "error" not in result:
-            result["error"] = None
         results.append(result)
 
-        print(f"{result['timestamp'].isoformat()} | {result['ip']} - {device_name}: {'Reachable' if result['reachable'] else 'Unreachable'} | RTT: {result['rtt_ms']} ms | TTL: {result['ttl']}")
+        print(f"{result['timestamp'].isoformat()} | {result['ip']} - {device_name}: "
+              f"{'Reachable' if result['reachable'] else 'Unreachable'} | RTT: {result['rtt_ms']} ms | TTL: {result['ttl']}")
         camera_index += 1
 
     # Ping extra custom IPs outside the main range
@@ -116,11 +124,10 @@ def run_ping_cycle(conn):
             continue
         result = ping_ip(ip)
         result["name"] = custom_names[extra_ip_str]
-        if "error" not in result:
-            result["error"] = None
         results.append(result)
 
-        print(f"{result['timestamp'].isoformat()} | {result['ip']} - {result['name']}: {'Reachable' if result['reachable'] else 'Unreachable'} | RTT: {result['rtt_ms']} ms | TTL: {result['ttl']}")
+        print(f"{result['timestamp'].isoformat()} | {result['ip']} - {result['name']}: "
+              f"{'Reachable' if result['reachable'] else 'Unreachable'} | RTT: {result['rtt_ms']} ms | TTL: {result['ttl']}")
 
     insert_ping_results(conn, results)
 
@@ -145,8 +152,8 @@ def main():
     try:
         while True:
             run_ping_cycle(conn)
-            print("⏳ Waiting 2 minutes...\n")
-            time.sleep(120)  # Wait 2 minutes
+            print("⏳ Waiting 5 minutes...\n")
+            time.sleep(300)  # Wait 5 minutes
     except KeyboardInterrupt:
         print("\n🛑 Stopped by user.")
     finally:

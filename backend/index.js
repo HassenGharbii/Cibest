@@ -1,139 +1,121 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const { Pool } = require('pg');
 
 const app = express();
-const port = 5001;
+const port = 3000;
 
-app.use(cors()); // Enable CORS for all origins
+// PostgreSQL connection (match Python env variables)
+const pool = new Pool({
+  host: process.env.POSTGRES_HOST || 'db',
+  port: process.env.POSTGRES_PORT || 5432,
+  database: process.env.POSTGRES_DB || 'cdgxpress',
+  user: process.env.POSTGRES_USER || 'cdgxpress_user',
+  password: process.env.POSTGRES_PASSWORD || 'password',
+});
 
-// Globals
-let currentData = [];
-const dataFilePath = path.join(__dirname, 'data.json');
+// Middleware
+app.use(cors());
 
-// Load initial data
-function loadInitialData() {
+// API Routes
+
+// All cameras (latest status per host)
+app.get('/api/cibest/cameras', async (req, res) => {
   try {
-    const raw = fs.readFileSync(dataFilePath, 'utf8');
-    currentData = JSON.parse(raw);
-    console.log(`Loaded ${currentData.length} camera records from data.json`);
+    const result = await pool.query(`
+      SELECT DISTINCT ON (ip) id, ip, name, reachable, rtt_ms, ttl, timestamp, error
+      FROM ping_results
+      ORDER BY ip, timestamp DESC;
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      timestamp: new Date().toISOString(),
+      total_cameras: result.rowCount,
+    });
   } catch (err) {
-    console.warn(`Warning loading data.json: ${err.message}`);
-    currentData = [];
+    console.error(err);
+    res.status(500).json({ success: false, error: 'DB query failed' });
   }
-}
+});
 
-// Simulate updates
-function simulateCameraData() {
-  const updatedData = [];
-  const now = new Date().toISOString();
+// Cameras status summary
+app.get('/api/cibest/cameras/status', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT ip, reachable
+      FROM (
+        SELECT DISTINCT ON (ip) ip, reachable
+        FROM ping_results
+        ORDER BY ip, timestamp DESC
+      ) latest;
+    `);
 
-  currentData.forEach((camera) => {
-    const updatedCamera = { ...camera, timestamp: now };
+    const total = result.rows.length;
+    const online = result.rows.filter(r => r.reachable).length;
+    const offline = total - online;
 
-    if (camera.reachable === 'true') {
-      if (Math.random() < 0.95) {
-        updatedCamera.reachable = 'true';
-        const baseRTT = camera.rtt_ms || 20;
-        updatedCamera.rtt_ms = Math.max(1, baseRTT + Math.floor(Math.random() * 21) - 10);
-        updatedCamera.ttl = camera.ttl || 62;
-        updatedCamera.error = null;
-      } else {
-        updatedCamera.reachable = 'false';
-        updatedCamera.rtt_ms = null;
-        updatedCamera.ttl = null;
-        updatedCamera.error = 'Timeout';
-      }
-    } else {
-      if (Math.random() < 0.8) {
-        updatedCamera.reachable = 'false';
-        updatedCamera.rtt_ms = null;
-        updatedCamera.ttl = null;
-        updatedCamera.error = 'Timeout';
-      } else {
-        updatedCamera.reachable = 'true';
-        updatedCamera.rtt_ms = Math.floor(Math.random() * 46) + 15;
-        updatedCamera.ttl = camera.name.includes('Camera') ? 62 : 126;
-        updatedCamera.error = null;
-      }
+    res.json({
+      success: true,
+      summary: {
+        total_cameras: total,
+        online,
+        offline,
+        uptime_percentage: total > 0 ? Math.round((online / total) * 10000) / 100 : 0,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'DB query failed' });
+  }
+});
+
+// Get specific camera by ID
+app.get('/api/cibest/cameras/:cameraId', async (req, res) => {
+  try {
+    const id = parseInt(req.params.cameraId);
+    const result = await pool.query(
+      `SELECT * FROM ping_results WHERE id = $1`,
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, error: `Camera with ID ${id} not found` });
     }
 
-    updatedData.push(updatedCamera);
-  });
-
-  return updatedData;
-}
-
-// Update every 130 seconds
-function startDataUpdater() {
-  setInterval(() => {
-    currentData = simulateCameraData();
-    fs.writeFile(dataFilePath, JSON.stringify(currentData, null, 2), (err) => {
-      if (err) console.warn('Could not save data:', err);
+    res.json({
+      success: true,
+      data: result.rows[0],
+      timestamp: new Date().toISOString(),
     });
-    console.log(`[${new Date().toISOString()}] Data updated.`);
-  }, 130000);
-}
-
-// API routes
-
-app.get('/api/cibest/cameras', (req, res) => {
-  res.json({
-    success: true,
-    data: currentData,
-    timestamp: new Date().toISOString(),
-    total_cameras: currentData.length,
-  });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'DB query failed' });
+  }
 });
 
-app.get('/api/cibest/cameras/status', (req, res) => {
-  const total = currentData.length;
-  const online = currentData.filter(c => c.reachable === 'true').length;
-  const offline = total - online;
-
-  res.json({
-    success: true,
-    summary: {
-      total_cameras: total,
-      online,
-      offline,
-      uptime_percentage: total > 0 ? Math.round((online / total) * 10000) / 100 : 0,
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get('/api/cibest/cameras/:cameraId', (req, res) => {
-  const id = parseInt(req.params.cameraId);
-  const camera = currentData.find(c => c.id === id);
-
-  if (!camera) {
-    return res.status(404).json({
-      success: false,
-      error: `Camera with ID ${id} not found`
+// Health check
+app.get('/api/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) FROM ping_results;');
+    res.json({
+      status: 'healthy',
+      service: 'Cibest Camera Monitoring API (Node.js)',
+      timestamp: new Date().toISOString(),
+      rows_in_db: parseInt(result.rows[0].count, 10),
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'unhealthy',
+      error: 'DB not reachable',
+      timestamp: new Date().toISOString(),
     });
   }
-
-  res.json({
-    success: true,
-    data: camera,
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    service: 'Cibest Camera Monitoring API (Node.js)',
-    timestamp: new Date().toISOString(),
-    data_loaded: currentData.length > 0
-  });
 });
 
 // Init
 app.listen(port, () => {
   console.log(`🚀 API server running at http://localhost:${port}`);
-  loadInitialData();
-  startDataUpdater();
 });

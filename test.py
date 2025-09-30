@@ -1,124 +1,61 @@
-import subprocess
-import platform
-import ipaddress
-import re
-import time
+import socket
 from datetime import datetime
 
-custom_names = {
-    "10.136.115.96": "MDR6",
-    "10.136.115.100": "Serveur IA"
-}
+UDP_PORT = 5600
 
-def get_device_name(ip, index):
-    ip_str = str(ip)
-    if ip_str in custom_names:
-        return custom_names[ip_str]
-    else:
-        return f"Camera {index}"
+def compute_lrc(frame: str) -> str:
+    """Compute 1-byte LRC checksum."""
+    checksum = sum(bytearray(frame, "utf-8")) & 0xFF
+    return f"[{checksum}]"
 
-def ping_ip(ip):
-    system = platform.system().lower()
-    count_flag = '-n' if system == 'windows' else '-c'
-    cmd = ['ping', count_flag, '1', str(ip)]
+def send_stat_request(ip, retries=3, timeout=2):
+    """
+    Send STAT=?[LRC] to a device over UDP and wait for response.
+    """
+    frame = "STAT=?"
+    message = frame + compute_lrc(frame)
 
-    try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
-        output = result.stdout
+    print(f"\n📡 Sending to {ip}:{UDP_PORT} → {message}")
 
-        # Debug: uncomment to see raw ping output for troubleshooting
-        # print(f"DEBUG: Ping output for {ip}:\n{output}")
+    for attempt in range(1, retries + 1):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
 
-        reachable = result.returncode == 0
-        rtt = None
-        ttl = None
+            print(f"➡️ Attempt {attempt}/{retries} | Sending STAT request...")
+            sock.sendto(message.encode("utf-8"), (str(ip), UDP_PORT))
 
-        if reachable:
-            if system == 'windows':
-                # Windows example: Reply from 8.8.8.8: bytes=32 time=14ms TTL=117
-                rtt_match = re.search(r'time[=<]?\s*(\d+)\s*ms', output, re.IGNORECASE)
-                ttl_match = re.search(r'ttl[=|:](\d+)', output, re.IGNORECASE)
+            data, _ = sock.recvfrom(1024)
+            response = data.decode("utf-8").strip()
+
+            print(f"✅ Response from {ip}: {response}")
+
+            sock.close()
+
+            if response.startswith("STAT="):
+                return {
+                    "ip": str(ip),
+                    "reachable": True,
+                    "response": response,
+                    "timestamp": datetime.now(),
+                    "error": None
+                }
             else:
-                # Linux/macOS example: 64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=14.2 ms
-                rtt_match = re.search(r'time[=<]?\s*(\d+(?:\.\d+)?)\s*ms', output, re.IGNORECASE)
-                ttl_match = re.search(r'ttl[=|:](\d+)', output, re.IGNORECASE)
+                print(f"⚠️ Unexpected response format from {ip}: {response}")
 
-            if rtt_match:
-                rtt = float(rtt_match.group(1))
-            if ttl_match:
-                ttl = int(ttl_match.group(1))
+        except socket.timeout:
+            print(f"⏱️ Timeout waiting for response (attempt {attempt}) from {ip}")
+        except Exception as e:
+            print(f"❌ Error communicating with {ip} (attempt {attempt}): {e}")
+        finally:
+            sock.close()
 
-        return {
-            "ip": str(ip),
-            "reachable": reachable,
-            "rtt_ms": rtt,
-            "ttl": ttl,
-            "timestamp": datetime.now().isoformat(),
-        }
+    print(f"❌ No valid response from {ip} after {retries} attempts.")
 
-    except subprocess.TimeoutExpired:
-        return {
-            "ip": str(ip),
-            "reachable": False,
-            "rtt_ms": None,
-            "ttl": None,
-            "timestamp": datetime.now().isoformat(),
-            "error": "Timeout"
-        }
-    except Exception as e:
-        return {
-            "ip": str(ip),
-            "reachable": False,
-            "rtt_ms": None,
-            "ttl": None,
-            "timestamp": datetime.now().isoformat(),
-            "error": str(e)
-        }
-
-def run_ping_cycle():
-    start_ip = ipaddress.IPv4Address('10.136.115.60')
-    end_ip = ipaddress.IPv4Address('10.136.115.75')
-
-    results = []
-    camera_index = 1
-
-    print(f"\n📡 Starting new ping cycle at {datetime.now().isoformat()}\n")
-
-    for ip_int in range(int(start_ip), int(end_ip) + 1):
-        ip = ipaddress.IPv4Address(ip_int)
-        device_name = get_device_name(ip, camera_index)
-        result = ping_ip(ip)
-        result["name"] = device_name
-        if "error" not in result:
-            result["error"] = None
-        results.append(result)
-
-        print(f"{result['timestamp']} | {result['ip']} - {device_name}: {'Reachable' if result['reachable'] else 'Unreachable'} | RTT: {result['rtt_ms']} ms | TTL: {result['ttl']}")
-        camera_index += 1
-
-    # Ping extra custom IPs outside the main range
-    for extra_ip_str in custom_names:
-        ip = ipaddress.IPv4Address(extra_ip_str)
-        if start_ip <= ip <= end_ip:
-            continue
-        result = ping_ip(ip)
-        result["name"] = custom_names[extra_ip_str]
-        if "error" not in result:
-            result["error"] = None
-        results.append(result)
-
-        print(f"{result['timestamp']} | {result['ip']} - {result['name']}: {'Reachable' if result['reachable'] else 'Unreachable'} | RTT: {result['rtt_ms']} ms | TTL: {result['ttl']}")
-
-    return results
-
-def main():
-    try:
-        while True:
-            run_ping_cycle()
-            print("⏳ Waiting 2 minutes...\n")
-            time.sleep(120)  # Wait 2 minutes
-    except KeyboardInterrupt:
-        print("\n🛑 Stopped by user.")
-
-if __name__ == "__main__":
-    main()
+    return {
+        "ip": str(ip),
+        "reachable": False,
+        "response": None,
+        "timestamp": datetime.now(),
+        "error": "No response after retries"
+    }
